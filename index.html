@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Arctic 1.0 | Cloud IDE</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        :root {
+            --arctic-blue: #020617;
+            --arctic-surface: #0f172a;
+            --arctic-accent: #38bdf8;
+            --arctic-border: #1e293b;
+        }
+        body, html { height: 100%; margin: 0; background: var(--arctic-blue); color: white; overflow: hidden; font-family: sans-serif; }
+        .app-grid { display: grid; grid-template-rows: 45px 1fr 180px; height: 100vh; }
+        .workspace { display: grid; grid-template-columns: 1fr 400px; }
+        .header { background: #010409; border-bottom: 1px solid var(--arctic-border); display: flex; align-items: center; justify-content: space-between; padding: 0 15px; }
+        #editor { height: 100%; }
+        #preview { background: white; border-left: 2px solid var(--arctic-accent); position: relative; }
+        .terminal { background: #000; padding: 10px; font-family: monospace; font-size: 12px; overflow-y: auto; color: #94a3b8; border-top: 1px solid var(--arctic-border); }
+        .btn-run { background: var(--arctic-accent); color: var(--arctic-blue); font-weight: bold; padding: 4px 15px; border-radius: 4px; font-size: 12px; }
+        iframe { width: 100%; height: 100%; border: none; }
+    </style>
+</head>
+<body>
+
+    <div class="app-grid">
+        <header class="header">
+            <div class="flex items-center gap-3">
+                <span class="text-sky-400 font-black tracking-widest">ARCTIC 1.0</span>
+            </div>
+            <button id="run-btn" class="btn-run">RUN SESSION</button>
+        </header>
+
+        <div class="workspace">
+            <div id="editor"></div>
+            <div id="preview">
+                <div id="msg" class="absolute inset-0 flex items-center justify-center text-slate-400 italic text-sm text-center p-4">
+                    Localhost preview will appear here...
+                </div>
+                <iframe id="localhost-frame" class="hidden"></iframe>
+            </div>
+        </div>
+
+        <div class="terminal" id="term-out">
+            <div class="text-sky-500 underline mb-1">Arctic Debug Console</div>
+            <div id="logs">Booting virtual environment...</div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs/loader.min.js"></script>
+    
+    <script type="module">
+        import { WebContainer } from 'https://unpkg.com/@webcontainer/api@1.1.8/dist/index.js';
+
+        let editor;
+        let container;
+
+        function log(msg) {
+            const l = document.getElementById('logs');
+            l.innerText += `\n> ${msg}`;
+            document.getElementById('term-out').scrollTop = 9999;
+        }
+
+        // Initialize Monaco
+        require.config({ paths: { vs: 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs' } });
+        require(['vs/editor/editor.main'], function () {
+            editor = monaco.editor.create(document.getElementById('editor'), {
+                value: "import express from 'express';\nconst app = express();\n\napp.get('/', (req, res) => {\n  res.send('<h1>Arctic 1.0</h1><p>Running on Vercel Static</p>');\n});\n\napp.listen(3000, () => console.log('Server live on port 3000'));",
+                language: 'javascript',
+                theme: 'vs-dark',
+                automaticLayout: true
+            });
+        });
+
+        window.addEventListener('load', async () => {
+            try {
+                container = await WebContainer.boot();
+                log("Arctic Kernel Online.");
+
+                await container.mount({
+                    'package.json': {
+                        file: { contents: JSON.stringify({ name: 'app', type: 'module', dependencies: { express: 'latest' } }) }
+                    },
+                    'index.js': { file: { contents: '' } }
+                });
+
+                document.getElementById('run-btn').onclick = async () => {
+                    log("Updating files...");
+                    await container.fs.writeFile('index.js', editor.getValue());
+                    
+                    log("Installing dependencies (npm install)...");
+                    const install = await container.spawn('npm', ['install']);
+                    install.output.pipeTo(new WritableStream({ write(d) { log(d) } }));
+                    await install.exit;
+
+                    log("Starting server...");
+                    const run = await container.spawn('node', ['index.js']);
+                    run.output.pipeTo(new WritableStream({ write(d) { log(d) } }));
+
+                    container.on('server-ready', (port, url) => {
+                        document.getElementById('msg').classList.add('hidden');
+                        const frame = document.getElementById('localhost-frame');
+                        frame.classList.remove('hidden');
+                        frame.src = url;
+                        log("Localhost ready at " + url);
+                    });
+                };
+            } catch (e) {
+                log("ERROR: " + e.message);
+                log("Ensure vercel.json headers are active.");
+            }
+        });
+    </script>
+</body>
+</html>
